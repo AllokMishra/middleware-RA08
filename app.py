@@ -2,9 +2,13 @@ from flask import Flask, request, jsonify
 import logging
 from datetime import datetime
 import os
+import json
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -13,32 +17,48 @@ app = Flask(__name__)
 def identify_callback():
     """
     Handle identify callback from face recognition device
-    Expected parameters based on the documentation:
-    - deviceKey: Device serial number
-    - personId: Person ID
-    - time: Identify record timestamp
-    - type: Recognition type (face_0, face_1, face_2, etc.)
-    - path: Photo access URL
-    - imgBase64: Snap photo base64 string
-    - data: Additional data (ID card info, etc.)
-    - ip: Device LAN IP address
-    - searchScore: Recognition score
-    - livenessScore: Liveness score
-    - temperature: Personnel temperature
-    - standard: Temperature abnormal value
-    - temperatureState: Body temperature status
-    - mask: Mask status (-1, 0, 1)
     """
     try:
         # Log the received data
         data = request.form.to_dict()
-        logger.info(f"Identify callback received: {data}")
         
-        # Log additional details
-        logger.info(f"Callback from device: {data.get('deviceKey', 'Unknown')}")
+        # Parse JSON data if present
+        alcohol_data = {}
+        if 'data' in data and data['data']:
+            try:
+                alcohol_data = json.loads(data['data'])
+            except json.JSONDecodeError:
+                alcohol_data = {"raw": data['data']}
+        
+        # Extract and log important information
+        logger.info("=" * 60)
+        logger.info("IDENTIFY CALLBACK RECEIVED")
+        logger.info("=" * 60)
+        logger.info(f"Device: {data.get('deviceKey', 'Unknown')}")
         logger.info(f"Person ID: {data.get('personId', 'Unknown')}")
-        logger.info(f"Recognition type: {data.get('type', 'Unknown')}")
-        logger.info(f"Temperature: {data.get('temperature', 'N/A')}")
+        logger.info(f"Person Name: {data.get('personName', 'Unknown')}")
+        logger.info(f"Recognition Type: {data.get('type', 'Unknown')}")
+        logger.info(f"Timestamp: {data.get('time', 'Unknown')}")
+        logger.info(f"Search Score: {data.get('searchScore', 'N/A')}")
+        logger.info(f"Liveness Score: {data.get('livenessScore', 'N/A')}")
+        logger.info(f"Mask Status: {data.get('mask', 'N/A')}")
+        logger.info(f"Device IP: {data.get('ip', 'N/A')}")
+        
+        # Log alcohol detection data if available
+        if alcohol_data:
+            logger.info("Alcohol Detection Data:")
+            for key, value in alcohol_data.items():
+                logger.info(f"  {key}: {value}")
+        
+        # Log image info (but not the full base64 to avoid log spam)
+        if 'imgBase64' in data:
+            img_size = len(data['imgBase64'])
+            logger.info(f"Image Size: {img_size} bytes (base64)")
+        
+        if 'path' in data:
+            logger.info(f"Image URL: {data['path']}")
+        
+        logger.info("=" * 60)
         
         # Return the expected response format
         response = {"result": 1, "code": "000"}
@@ -52,24 +72,21 @@ def identify_callback():
 def heartbeat_callback():
     """
     Handle heartbeat callback from face recognition device
-    Expected parameters:
-    - deviceKey: Device serial number
-    - time: Timestamp
-    - personCount: Number of registered personnel
-    - faceCount: Number of registered photos
-    - ip: Device IP address
-    - version: Device current version number
     """
     try:
         # Log the received data
         data = request.form.to_dict()
-        logger.info(f"Heartbeat received: {data}")
         
-        # Log device status
-        logger.info(f"Heartbeat from device: {data.get('deviceKey', 'Unknown')}")
-        logger.info(f"Registered persons: {data.get('personCount', 'N/A')}")
-        logger.info(f"Registered faces: {data.get('faceCount', 'N/A')}")
-        logger.info(f"Device version: {data.get('version', 'N/A')}")
+        logger.info("=" * 60)
+        logger.info("HEARTBEAT RECEIVED")
+        logger.info("=" * 60)
+        logger.info(f"Device: {data.get('deviceKey', 'Unknown')}")
+        logger.info(f"Timestamp: {data.get('time', 'Unknown')}")
+        logger.info(f"Registered Persons: {data.get('personCount', 'N/A')}")
+        logger.info(f"Registered Faces: {data.get('faceCount', 'N/A')}")
+        logger.info(f"Device Version: {data.get('version', 'N/A')}")
+        logger.info(f"Device IP: {data.get('ip', 'N/A')}")
+        logger.info("=" * 60)
         
         # No response data needed according to documentation
         return '', 200
@@ -84,7 +101,23 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "service": "Face Device Callback Server"
+        "service": "Face Device Callback Server",
+        "endpoints": {
+            "identify_callback": "POST /identify_callback",
+            "heartbeat_callback": "POST /heartbeat_callback",
+            "health": "GET /health"
+        }
+    })
+
+@app.route('/test', methods=['GET', 'POST'])
+def test_endpoint():
+    """Test endpoint to simulate device callbacks"""
+    return jsonify({
+        "message": "Test endpoint working",
+        "usage": {
+            "identify_callback": "POST form data to /identify_callback",
+            "heartbeat_callback": "POST form data to /heartbeat_callback"
+        }
     })
 
 if __name__ == '__main__':
