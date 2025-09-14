@@ -7,9 +7,9 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
 # Device config - UPDATE THESE!
-DEVICE_IP = "192.168.1.100"  # Change to your device IP
-DEVICE_KEY = "0A09010BC2687C45"  # Change to your device serial
-SECRET = "tdx"  # Change to your device password
+DEVICE_IP = "10.204.122.128"  # Change to your device IP
+DEVICE_KEY = "BB67566D70ED9B84"  # Change to your device serial
+SECRET = "123456"  # Change to your device password
 BASE_URL = f"http://{DEVICE_IP}:8190/api"
 
 @app.route('/identify_callback', methods=['POST'])
