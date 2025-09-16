@@ -250,8 +250,11 @@ class AccessControllerServer:
             if self.controller_conn:
                 self.controller_conn.send(open_door_frame)
                 logger.info("Open door command sent")
+                return True
         except Exception as e:
             logger.error(f"Error sending open door command: {e}")
+        
+        return False
     
     def handle_controller_connection(self, conn, addr):
         """Handle communication with a connected controller"""
@@ -316,15 +319,21 @@ class AccessControllerServer:
             
             while self.running:
                 logger.info("Waiting for controller connection...")
-                conn, addr = self.server_socket.accept()
-                
-                # Handle the connection in a separate thread
-                client_thread = threading.Thread(
-                    target=self.handle_controller_connection,
-                    args=(conn, addr)
-                )
-                client_thread.daemon = True
-                client_thread.start()
+                try:
+                    conn, addr = self.server_socket.accept()
+                    
+                    # Handle the connection in a separate thread
+                    client_thread = threading.Thread(
+                        target=self.handle_controller_connection,
+                        args=(conn, addr)
+                    )
+                    client_thread.daemon = True
+                    client_thread.start()
+                    
+                except OSError as e:
+                    if self.running:
+                        logger.error(f"Accept error: {e}")
+                    break
                 
         except Exception as e:
             logger.error(f"Server error: {e}")
@@ -335,9 +344,15 @@ class AccessControllerServer:
         """Stop the server"""
         self.running = False
         if self.controller_conn:
-            self.controller_conn.close()
+            try:
+                self.controller_conn.close()
+            except:
+                pass
         if self.server_socket:
-            self.server_socket.close()
+            try:
+                self.server_socket.close()
+            except:
+                pass
         logger.info("Server stopped")
     
     def trigger_open_door(self):
@@ -350,28 +365,14 @@ def main():
     server = AccessControllerServer(host='0.0.0.0', port=8001)
     
     try:
-        # Start the server in a separate thread
-        server_thread = threading.Thread(target=server.start_server)
-        server_thread.daemon = True
-        server_thread.start()
-        
-        # Simple console interface
-        print("Access Controller Server")
-        print("Commands:")
-        print("  'open' - Send open door command")
-        print("  'quit' - Stop the server")
-        
-        while True:
-            cmd = input("> ").strip().lower()
-            if cmd == 'open':
-                server.trigger_open_door()
-            elif cmd == 'quit':
-                break
-            else:
-                print("Unknown command")
+        # Start the server
+        print("Starting Access Controller Server...")
+        server.start_server()
                 
     except KeyboardInterrupt:
         print("\nShutting down...")
+    except Exception as e:
+        print(f"Server error: {e}")
     finally:
         server.stop_server()
 
