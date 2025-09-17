@@ -1,7 +1,10 @@
-import socket
-import threading
+import json
 import logging
+import threading
+import time
 from datetime import datetime
+import paho.mqtt.client as mqtt
+import random
 
 # Configure logging
 logging.basicConfig(
@@ -10,161 +13,261 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-HOST = '0.0.0.0'
-PORT = 8001
+class TurnstileMQTTClient:
+    def __init__(self):
+        self.client = None
+        self.connected = False
+        self.serial_no = "119112"  # From your configuration
+        self.device_id = "1J9112"   # From your configuration
+        
+        # MQTT Configuration - You'll need to set these parameters
+        self.broker_host = "your-mqtt-broker.com"  # e.g., "mqtt.eclipse.org"
+        self.broker_port = 1883
+        self.username = "username"
+        self.password = "password"
+        self.keepalive = 60
+        
+        # Topics
+        self.status_topic = f"/sys/{self.serial_no}/{self.device_id}/thing/event/property/post"
+        self.event_topic = f"/sys/{self.serial_no}/{self.device_id}/thing/event/post"
+        self.command_topic = f"/sys/{self.serial_no}/{self.device_id}/thing/command/post"
 
-def calculate_checksum(data_bytes):
-    """Calculate XOR checksum for a list of bytes."""
-    checksum = 0
-    for byte in data_bytes:
-        checksum ^= byte
-    return checksum
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            logger.info("Connected to MQTT broker successfully")
+            self.connected = True
+            # Subscribe to command topic
+            client.subscribe(self.command_topic)
+            logger.info(f"Subscribed to command topic: {self.command_topic}")
+            # Start heartbeat thread
+            self.start_heartbeat()
+        else:
+            logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
 
-def build_response_frame(command, data=None, door=0):
-    """Build a valid response frame based on the protocol."""
-    frame_parts = []
-    # Header
-    frame_parts.append(0x02)  # STX
-    frame_parts.append(0xA0)  # Rand
-    frame_parts.append(command)  # Command
-    frame_parts.append(0xFF)  # Address
-    frame_parts.append(door)   # Door
+    def on_message(self, client, userdata, msg):
+        try:
+            payload = msg.payload.decode()
+            logger.info(f"Received message on topic {msg.topic}: {payload}")
+            
+            data = json.loads(payload)
+            method = data.get("method", "")
+            
+            # Handle different commands
+            if method == "OpenDoor":
+                self.handle_open_door(data)
+            elif method == "CloseDoor":
+                self.handle_close_door(data)
+            elif method == "LockDoor":
+                self.handle_lock_door(data)
+            # Add more command handlers as needed
+                
+        except Exception as e:
+            logger.error(f"Error processing MQTT message: {e}")
 
-    # Handle data length (LOW byte first, then HIGH byte for commands we send)
-    if data is None:
-        data_bytes = []
-        frame_parts.append(0x00)  # LengthL
-        frame_parts.append(0x00)  # LengthH
-    else:
-        data_bytes = list(data)
-        data_length = len(data_bytes)
-        frame_parts.append(data_length & 0xFF)  # LengthL (low byte)
-        frame_parts.append((data_length >> 8) & 0xFF)  # LengthH (high byte)
+    def on_disconnect(self, client, userdata, rc):
+        logger.warning(f"Disconnected from MQTT broker, return code: {rc}")
+        self.connected = False
 
-    # Add data bytes if any
-    frame_parts.extend(data_bytes)
+    def connect(self):
+        """Connect to MQTT broker"""
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+        self.client.on_disconnect = self.on_disconnect
+        
+        if self.username and self.password:
+            self.client.username_pw_set(self.username, self.password)
+        
+        try:
+            self.client.connect(self.broker_host, self.broker_port, self.keepalive)
+            self.client.loop_start()
+            logger.info("MQTT client started")
+        except Exception as e:
+            logger.error(f"Failed to connect to MQTT broker: {e}")
 
-    # Calculate checksum up to this point
-    checksum = calculate_checksum(frame_parts)
-    frame_parts.append(checksum)
+    def start_heartbeat(self):
+        """Start sending heartbeat messages"""
+        def heartbeat_loop():
+            while True:
+                if self.connected:
+                    self.send_heartbeat()
+                time.sleep(30)  # Send heartbeat every 30 seconds
+        
+        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+        logger.info("Heartbeat thread started")
 
-    # End of frame
-    frame_parts.append(0x03)  # ETX
+    def send_heartbeat(self):
+        """Send status heartbeat"""
+        heartbeat_data = {
+            "id": random.randint(1, 1000),
+            "version": "1.0",
+            "method": "Status",
+            "taskNo": 10,
+            "data": {
+                "Serial": self.serial_no,
+                "ID": self.device_id,
+                "DoorStatus": [0, 0],  # Example: [door1_status, door2_status]
+                "Input": 0,
+                "Now": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Firmware": "0.2.128",
+                "BuildTime": "Feb 13 2025 14:43:49",
+                "PCBCode": "DD1B",
+                "Model": "G-ZJ1000TCP",
+                "TimeStamp": int(time.time()),
+                "CardsinPacket": 16,
+                "SystemOption": 57,
+                "DoorRelay": [0, 0],
+                "AlarmRelay": [0, 0],
+                "Button": [0, 0],
+                "Sensor": [0, 0],
+                "AlarmIn": 0,
+                "FireIn": 0,
+                "TamperIn": 0,
+                "ResetIn": 0
+            }
+        }
+        
+        try:
+            result = self.client.publish(self.status_topic, json.dumps(heartbeat_data))
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                logger.info("Heartbeat sent successfully")
+            else:
+                logger.error(f"Failed to send heartbeat: {result.rc}")
+        except Exception as e:
+            logger.error(f"Error sending heartbeat: {e}")
 
-    return bytes(frame_parts)
+    def send_card_event(self, card_number, door=1, event_type=1):
+        """Send card swipe event"""
+        event_data = {
+            "id": random.randint(1, 1000),
+            "version": "1.0",
+            "taskNo": 10,
+            "method": "CardEvent",
+            "data": {
+                "Serial": self.serial_no,
+                "Time": datetime.now().strftime("%Y%m%d%H%M%S"),
+                "DataType": 0,
+                "Card": str(card_number),
+                "EventType": event_type,
+                "Door": door,
+                "Reader": 0,
+                "Exist": 1,
+                "Pass": 1,
+                "APBInOut": 0,
+                "APBOn": 0,
+                "Count": 0,
+                "Index": random.randint(1, 1000)
+            }
+        }
+        
+        try:
+            result = self.client.publish(self.event_topic, json.dumps(event_data))
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                logger.info(f"Card event sent for card: {card_number}")
+            else:
+                logger.error(f"Failed to send card event: {result.rc}")
+        except Exception as e:
+            logger.error(f"Error sending card event: {e}")
 
-def handle_heartbeat(data):
-    """Handle heartbeat command (0x56) from controller."""
-    # The heartbeat response requires 2 bytes of customer code (often 0x00)
-    response_data = bytes([0x00, 0x00])  # Customer code high & low byte
-    response_frame = build_response_frame(0x56, data=response_data)
-    return response_frame
+    def handle_open_door(self, data):
+        """Handle open door command"""
+        door = data.get("data", {}).get("Door", 0)
+        open_cmd = data.get("data", {}).get("Open", 1)
+        
+        logger.info(f"Received open door command: Door={door}, Open={open_cmd}")
+        
+        # Here you would implement the actual door opening logic
+        # For now, we'll just log it and send a response
+        
+        response = {
+            "id": data["id"],
+            "code": "0",
+            "taskNo": data["taskNo"],
+            "method": "OpenDoor",
+            "message": "",
+            "Serial": self.serial_no,
+            "version": data["version"],
+            "data": {}
+        }
+        
+        try:
+            self.client.publish(self.command_topic, json.dumps(response))
+            logger.info("Open door response sent")
+        except Exception as e:
+            logger.error(f"Error sending open door response: {e}")
 
-def handle_swipe_record(data):
-    """Handle swipe record command (0x53) from controller."""
-    # The response must echo back the record serial number (7th byte of data)
-    if len(data) >= 7:
-        record_serial = data[6:7]  # Get the serial number byte
-        response_frame = build_response_frame(0x53, data=record_serial)
-        return response_frame
-    return None
+    def handle_close_door(self, data):
+        """Handle close door command"""
+        door = data.get("data", {}).get("Door", 0)
+        logger.info(f"Received close door command for door: {door}")
+        
+        # Implement door closing logic here
+        
+        response = {
+            "id": data["id"],
+            "code": "0",
+            "taskNo": data["taskNo"],
+            "method": "CloseDoor",
+            "message": "",
+            "Serial": self.serial_no,
+            "version": data["version"],
+            "data": {}
+        }
+        
+        try:
+            self.client.publish(self.command_topic, json.dumps(response))
+            logger.info("Close door response sent")
+        except Exception as e:
+            logger.error(f"Error sending close door response: {e}")
 
-def handle_client_connection(client_socket, address):
-    """Handle the incoming connection from the turnstile controller."""
-    logger.info(f"Turnstile connection established from {address}")
+    def handle_lock_door(self, data):
+        """Handle lock door command"""
+        door = data.get("data", {}).get("Door", 0)
+        lock = data.get("data", {}).get("Lock", 1)
+        
+        logger.info(f"Received lock door command: Door={door}, Lock={lock}")
+        
+        # Implement door locking logic here
+        
+        response = {
+            "id": data["id"],
+            "code": "0",
+            "taskNo": data["taskNo"],
+            "method": "LockDoor",
+            "message": "",
+            "Serial": self.serial_no,
+            "version": data["version"],
+            "data": 0
+        }
+        
+        try:
+            self.client.publish(self.command_topic, json.dumps(response))
+            logger.info("Lock door response sent")
+        except Exception as e:
+            logger.error(f"Error sending lock door response: {e}")
+
+    def disconnect(self):
+        """Disconnect from MQTT broker"""
+        if self.client:
+            self.client.loop_stop()
+            self.client.disconnect()
+            logger.info("MQTT client disconnected")
+
+# Usage example
+if __name__ == "__main__":
+    # Create requirements.txt with: paho-mqtt
+    
+    mqtt_client = TurnstileMQTTClient()
     
     try:
+        mqtt_client.connect()
+        
+        # Keep the main thread alive
         while True:
-            # Read data from the controller
-            data = client_socket.recv(1024)
-            if not data:
-                logger.info(f"Connection closed by {address}")
-                break
-
-            # Log raw received data
-            hex_data = ' '.join(f"{b:02x}" for b in data)
-            logger.info(f"Received from {address}: {hex_data}")
-
-            # Validate frame structure (must start with 0x02 and end with 0x03)
-            if data[0] != 0x02 or data[-1] != 0x03:
-                logger.warning(f"Invalid frame structure from {address}")
-                continue
-
-            # Verify checksum
-            received_checksum = data[-2]
-            calculated_checksum = calculate_checksum(data[0:-2])
+            time.sleep(1)
             
-            if received_checksum != calculated_checksum:
-                logger.warning(f"Checksum mismatch from {address}. Received: {received_checksum:02x}, Calculated: {calculated_checksum:02x}")
-                continue
-
-            # Extract command byte (3rd byte in frame)
-            command = data[2]
-            # Extract data portion (between header and checksum)
-            data_length = (data[6] << 8) | data[5]  # LengthH + LengthL
-            data_start = 7  # Header is 7 bytes
-            data_end = data_start + data_length
-            payload = data[data_start:data_end]
-
-            # Handle different commands
-            if command == 0x56:  # Heartbeat
-                logger.info("Handling heartbeat command (0x56)")
-                response = handle_heartbeat(payload)
-                if response:
-                    client_socket.sendall(response)
-                    logger.info("Sent heartbeat response")
-
-            elif command == 0x53:  # Swipe record
-                logger.info("Handling swipe record command (0x53)")
-                response = handle_swipe_record(payload)
-                if response:
-                    client_socket.sendall(response)
-                    logger.info("Sent swipe record response")
-
-            elif command == 0x54:  # Alarm record
-                logger.info("Handling alarm record command (0x54)")
-                # Respond similarly to swipe record
-                if len(payload) >= 6:
-                    record_serial = payload[5:6]
-                    response = build_response_frame(0x54, data=record_serial)
-                    client_socket.sendall(response)
-                    logger.info("Sent alarm record response")
-
-            else:
-                logger.warning(f"Unknown command received: 0x{command:02x}")
-
-    except socket.timeout:
-        logger.warning(f"Connection from {address} timed out")
-    except socket.error as e:
-        logger.error(f"Socket error with {address}: {e}")
-    except Exception as e:
-        logger.error(f"Error handling client {address}: {e}")
-    finally:
-        client_socket.close()
-        logger.info(f"Connection to {address} closed")
-
-def start_server():
-    """Start the TCP server."""
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((HOST, PORT))
-    server_socket.listen(5)
-    logger.info(f"Server started and listening on {HOST}:{PORT}")
-
-    try:
-        while True:
-            client_sock, address = server_socket.accept()
-            client_handler = threading.Thread(
-                target=handle_client_connection,
-                args=(client_sock, address),
-                daemon=True
-            )
-            client_handler.start()
-            logger.info(f"Started handler for {address}")
     except KeyboardInterrupt:
-        logger.info("Server shutting down")
+        logger.info("Shutting down MQTT client")
     finally:
-        server_socket.close()
-
-if __name__ == "__main__":
-    start_server()
+        mqtt_client.disconnect()
