@@ -312,7 +312,7 @@ if __name__ == "__main__":
     import threading
     
     # Replace with your controller's IP address
-    CONTROLLER_IP = "192.168.1.112"
+    CONTROLLER_IP = "192.168.0.112"
     
     client = AccessControllerClient(CONTROLLER_IP)
     
