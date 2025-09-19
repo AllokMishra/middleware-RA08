@@ -1,24 +1,29 @@
 import socket
 import time
 import struct
+import threading
+import random
 from datetime import datetime
 
 class AccessControllerClient:
-    def __init__(self, host, port=6000):
+    def __init__(self, host, port=8000):
         self.host = host
         self.port = port
         self.sock = None
         self.connected = False
+        self.listening = False
         
     def connect(self):
         """Establish connection to the access controller"""
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(5)  # 5 second timeout
             self.sock.connect((self.host, self.port))
             self.connected = True
             print(f"Connected to access controller at {self.host}:{self.port}")
+            print("Controller: G-221000TCP, Serial: 119112")
             
-            # Start a thread to listen for unsolicited messages from controller
+            # Start a thread to listen for messages from controller
             self.listening = True
             self.listener_thread = threading.Thread(target=self._listen_for_messages)
             self.listener_thread.daemon = True
@@ -134,6 +139,8 @@ class AccessControllerClient:
                     except ValueError as e:
                         print(f"Error parsing frame: {e}")
                         
+            except socket.timeout:
+                continue  # No data received, continue listening
             except Exception as e:
                 if self.listening:
                     print(f"Error in listener: {e}")
@@ -167,7 +174,6 @@ class AccessControllerClient:
         function_flags = data[10]
         controller_type = data[11]
         lock_status = data[12]
-        # Additional fields would be parsed here
         
         # Convert time
         year = time_data[0] + 2000
@@ -217,14 +223,12 @@ class AccessControllerClient:
     
     def _handle_alarm_record(self, data):
         """Handle alarm record (0x54)"""
-        # Similar implementation to swipe record handling
-        print("Received alarm record")
-        # Send response with record serial number
         if len(data) >= 10:
             record_serial = data[9]  # Position of serial number in alarm record
             response_data = bytes([record_serial])
             response_frame = self._create_command_frame(0x54, 0, response_data)
             self._send_frame(response_frame)
+            print("Received alarm record")
     
     def _handle_card_state_record(self, data):
         """Handle card state record (0x52)"""
@@ -277,12 +281,12 @@ class AccessControllerClient:
         return None
     
     # Specific command implementations
-    def open_door(self, door):
+    def open_door(self, door=1):
         """Send open door command (0x2C)"""
         print(f"Opening door {door}")
         return self.send_command(0x2C, door, bytes([door]))
     
-    def close_door(self, door):
+    def close_door(self, door=1):
         """Send close door command (0x2E)"""
         print(f"Closing door {door}")
         return self.send_command(0x2E, door, bytes([door]))
@@ -306,31 +310,45 @@ class AccessControllerClient:
         """Send reset controller command (0x04)"""
         print("Resetting controller")
         return self.send_command(0x04)
+    
+    def get_status(self):
+        """Request status from controller"""
+        print("Requesting controller status")
+        # Send a dummy command that might trigger a status response
+        return self.send_command(0x56, 0, b'')
 
 # Example usage
 if __name__ == "__main__":
-    import threading
+    # Use the IP address from your controller's display
+    CONTROLLER_IP = "192.168.0.112"  # From your controller's display
+    CONTROLLER_PORT = 8000           # From your controller's display
     
-    # Replace with your controller's IP address
-    CONTROLLER_IP = "192.168.0.112"
-    
-    client = AccessControllerClient(CONTROLLER_IP)
+    client = AccessControllerClient(CONTROLLER_IP, CONTROLLER_PORT)
     
     if client.connect():
         try:
+            # First, try to get status to see if controller responds
+            client.get_status()
+            
             # Synchronize time with controller
             client.set_time()
             
-            # Open door 1
+            # Try to open and close door 1
             client.open_door(1)
+            time.sleep(2)  # Wait 2 seconds
+            client.close_door(1)
             
             # Keep the connection alive to receive unsolicited messages
-            print("Listening for controller messages...")
-            time.sleep(30)  # Listen for 30 seconds
+            print("Listening for controller messages for 30 seconds...")
+            time.sleep(30)
             
         except KeyboardInterrupt:
             print("Disconnecting...")
         finally:
             client.disconnect()
     else:
-        print("Failed to connect to controller")
+        print("Failed to connect to controller. Please check:")
+        print("1. Your computer is on the same network (192.168.0.x)")
+        print("2. The controller IP is correct: 192.168.0.112")
+        print("3. No firewall is blocking port 8000")
+        print("4. The controller is powered on and connected to network")
